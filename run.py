@@ -213,56 +213,119 @@ def run_setup():
 
 
 async def run_gui_mode(use_mic: bool = True):
-    """Launch the agent with graphical interface."""
+    """Launch the agent with graphical interface.
+    
+    The agent runs on a background thread with its own asyncio event loop.
+    The UI runs on the main thread with tkinter.
+    Communication happens via thread-safe callbacks using root.after().
+    """
     import threading
+    import queue
 
     from core.agent import EnglishCoachAgent
     from ui.main_window import MainWindow
 
+    # Communication queue: agent thread -> UI thread
+    ui_queue = queue.Queue()
+
+    # Shutdown signal for the agent background thread
+    agent_stop_event = threading.Event()
+
+    # Create agent (will be initialized on the background thread)
     agent = EnglishCoachAgent()
 
-    # Create main window
+    # Create main window on the main thread
     window = MainWindow(agent)
 
-    # Wire UI to agent events
-    agent.on("on_state_change", lambda new, old: window.schedule_update(
-        window.update_state, new
+    # Wire UI to agent events via thread-safe queue
+    agent.on("on_state_change", lambda new, old: ui_queue.put(
+        ("state", new, old)
     ))
-    agent.on("on_transcription", lambda text: window.schedule_update(
-        window.update_transcription, text
+    agent.on("on_transcription", lambda text: ui_queue.put(
+        ("transcription", text)
     ))
-    agent.on("on_response", lambda processed: window.schedule_update(
-        window.update_response, processed
+    agent.on("on_response", lambda processed: ui_queue.put(
+        ("response", processed)
     ))
-    agent.on("on_correction", lambda correction: window.schedule_update(
-        window.update_correction, correction
+    agent.on("on_correction", lambda correction: ui_queue.put(
+        ("correction", correction)
     ))
-    agent.on("on_turn_complete", lambda result: window.schedule_update(
-        window.update_turn, result
+    agent.on("on_turn_complete", lambda result: ui_queue.put(
+        ("turn", result)
     ))
-    agent.on("on_error", lambda msg: window.schedule_update(
-        window.show_error, msg
+    agent.on("on_error", lambda msg: ui_queue.put(
+        ("error", msg)
     ))
 
-    # Update profile in sidebar after init
-    async def update_profile_display():
-        await asyncio.sleep(1)  # Give agent time to init
+    # Process UI queue periodically using tkinter's after()
+    def process_ui_queue():
         try:
-            profile = agent.get_profile()
-            window.schedule_update(window.update_profile, profile)
-        except Exception:
+            while True:
+                event = ui_queue.get_nowait()
+                ev_type = event[0]
+                if ev_type == "state":
+                    window.update_state(event[1], event[2])
+                elif ev_type == "transcription":
+                    window.update_transcription(event[1])
+                elif ev_type == "response":
+                    window.update_response(event[1])
+                elif ev_type == "correction":
+                    window.update_correction(event[1])
+                elif ev_type == "turn":
+                    window.update_turn(event[1])
+                elif ev_type == "error":
+                    window.show_error(event[1])
+        except queue.Empty:
             pass
+        finally:
+            if hasattr(window, 'root') and window.root:
+                window.root.after(50, process_ui_queue)
 
-    # Start the agent in background
-    agent_task = asyncio.create_task(agent.start(use_microphone=use_mic))
+    # Start polling the UI queue
+    window.root.after(100, process_ui_queue)
 
-    # Show profile in sidebar
-    asyncio.create_task(update_profile_display())
+    # Agent runs on a background thread with its own event loop
+    def run_agent():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def agent_main():
+            try:
+                await agent.start(use_microphone=use_mic)
+            except Exception as e:
+                logger.error(f"Agent error: {e}")
+                ui_queue.put(("error", str(e)))
+
+        try:
+            loop.run_until_complete(agent_main())
+        except Exception as e:
+            logger.error(f"Agent thread error: {e}")
+        finally:
+            # Run cleanup on the agent's loop
+            try:
+                loop.run_until_complete(agent.stop())
+            except Exception:
+                pass
+            loop.close()
+            logger.info("Agent thread finished")
+
+    agent_thread = threading.Thread(target=run_agent, daemon=True)
+    agent_thread.start()
 
     # Start session timer
-    window.schedule_update(window._start_timer)
+    window.root.after(500, window._start_timer)
 
-    # Start tray icon in a separate thread
+    # Show profile in sidebar after agent initializes
+    def show_profile():
+        try:
+            profile = agent.get_profile()
+            window.update_profile(profile)
+        except Exception:
+            window.root.after(1000, show_profile)  # Retry
+
+    window.root.after(2000, show_profile)
+
+    # Start tray icon
     try:
         from ui.tray_icon import TrayIcon
 
@@ -276,12 +339,11 @@ async def run_gui_mode(use_mic: bool = True):
     except Exception as e:
         logger.warning(f"Tray icon unavailable: {e}")
 
-    # Run the UI main loop (this blocks)
+    # Run the UI main loop on the main thread (blocks until window closes)
     window.start()
 
-    # Cleanup when UI closes
-    await agent.stop()
-    agent_task.cancel()
+    # Cleanup
+    logger.info("UI closed, agent thread will exit automatically")
 
 
 async def run_headless_mode(use_mic: bool = True):
