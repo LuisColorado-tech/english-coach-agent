@@ -660,7 +660,8 @@ class SetupWizard:
         import customtkinter as ctk
 
         for widget in self._widgets.values():
-            widget.pack_forget()
+            if hasattr(widget, 'pack_forget'):
+                widget.pack_forget()
 
         self._widgets.clear()
         self._current_step = index
