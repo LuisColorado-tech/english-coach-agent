@@ -97,25 +97,37 @@ class SileroVADHandler:
         return float(prob)
 
     async def process_audio(self, audio_frame: np.ndarray) -> VADState:
-        """
-        Process an audio frame and return current VAD state.
-        Updates internal state machine.
-        """
         if self._model is not None:
             try:
-                if audio_frame.ndim == 1:
-                    audio_frame = audio_frame.reshape(1, -1)
+                # silero-vad expects 1D float32 numpy array
+                audio_1d = audio_frame.astype(np.float32)
+                if audio_1d.ndim > 1:
+                    audio_1d = audio_1d.mean(axis=1)
 
-                prob = float(self._model(audio_frame, self.config.sample_rate))
-            except Exception:
+                prob = float(self._model(audio_1d, self.config.sample_rate))
+            except Exception as e:
+                logger.debug(f"Silero VAD failed, using energy fallback: {e}")
                 prob = await self._energy_vad(audio_frame)
         else:
             prob = await self._energy_vad(audio_frame)
 
         self._speech_prob = prob
 
+        # Log every ~20 frames to avoid spam
+        if not hasattr(self, '_frame_counter'):
+            self._frame_counter = 0
+        self._frame_counter += 1
+        if self._frame_counter % 20 == 0:
+            logger.debug(f"VAD prob: {prob:.3f} | threshold: {self.config.threshold} | "
+                         f"state: {self._state.name} | speaking: {self.is_speaking}")
+
         for cb in self._on_vad_prob:
-            await cb(prob)
+            try:
+                r = cb(prob)
+                if r is not None and asyncio.iscoroutine(r):
+                    await r
+            except Exception:
+                pass
 
         is_speech = prob >= self.config.threshold
 
@@ -128,13 +140,19 @@ class SileroVADHandler:
                 and self._speech_frames >= self._min_speech_frames
             ):
                 self._state = VADState.SPEECH
+                logger.debug("VAD: speech START detected")
                 for cb in self._on_speech_start:
-                    await cb()
+                    try:
+                        r = cb()
+                        if r is not None and asyncio.iscoroutine(r):
+                            await r
+                    except Exception:
+                        pass
         else:
             self._silence_frames += 1
 
             if self._state == VADState.SPEECH:
-                self._speech_frames += 1  # Continue counting for padding
+                self._speech_frames += 1
 
             if (
                 self._state == VADState.SPEECH
@@ -143,8 +161,14 @@ class SileroVADHandler:
             ):
                 self._state = VADState.SILENCE
                 self._speech_frames = 0
+                logger.debug("VAD: speech END detected")
                 for cb in self._on_speech_end:
-                    await cb()
+                    try:
+                        r = cb()
+                        if r is not None and asyncio.iscoroutine(r):
+                            await r
+                    except Exception:
+                        pass
 
         return self._state
 
