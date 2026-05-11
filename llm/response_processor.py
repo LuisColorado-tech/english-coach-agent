@@ -23,7 +23,7 @@ class Correction:
 
 @dataclass
 class ProcessedResponse:
-    conversational_text: str  # Clean text ready for TTS
+    conversational_text: str = ""
     corrections: list[Correction] = field(default_factory=list)
     new_vocabulary: list[dict] = field(default_factory=list)
     profile_updates: list[dict] = field(default_factory=list)
