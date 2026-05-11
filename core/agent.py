@@ -80,7 +80,9 @@ class EnglishCoachAgent:
     async def _emit(self, event: str, *args):
         for cb in self._ui_callbacks.get(event, []):
             try:
-                await cb(*args)
+                result = cb(*args)
+                if result is not None and asyncio.iscoroutine(result):
+                    await result
             except Exception as e:
                 logger.error(f"Callback error ({event}): {e}")
 

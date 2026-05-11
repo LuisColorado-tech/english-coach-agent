@@ -263,7 +263,12 @@ class Pipeline:
             logger.info(f"User said: '{user_text}'")
 
             for cb in self._on_transcription:
-                await cb(user_text)
+                try:
+                    r = cb(user_text)
+                    if r is not None and asyncio.iscoroutine(r):
+                        await r
+                except Exception:
+                    pass
 
             # Phase 2: LLM - Generate response
             self.set_state(PipelineState.THINKING)
@@ -278,12 +283,22 @@ class Pipeline:
             processed: ProcessedResponse = self.processor.process(response.content)
 
             for cb in self._on_response:
-                await cb(processed)
+                try:
+                    r = cb(processed)
+                    if r is not None and asyncio.iscoroutine(r):
+                        await r
+                except Exception:
+                    pass
 
             # Notify corrections
             for correction in processed.corrections:
                 for cb in self._on_correction:
-                    await cb(correction)
+                    try:
+                        r = cb(correction)
+                        if r is not None and asyncio.iscoroutine(r):
+                            await r
+                    except Exception:
+                        pass
 
             # Phase 3: TTS - Synthesize and play response
             if processed.conversational_text:
@@ -325,13 +340,23 @@ class Pipeline:
                 )
 
                 for cb in self._on_turn_complete:
-                    await cb(turn_result)
+                    try:
+                        r = cb(turn_result)
+                        if r is not None and asyncio.iscoroutine(r):
+                            await r
+                    except Exception:
+                        pass
 
         except Exception as e:
             logger.error(f"Pipeline error processing utterance: {e}")
             self.set_state(PipelineState.ERROR)
             for cb in self._on_error:
-                await cb(str(e))
+                try:
+                    r = cb(str(e))
+                    if r is not None and asyncio.iscoroutine(r):
+                        await r
+                except Exception:
+                    pass
         finally:
             if self._state != PipelineState.ERROR:
                 self.set_state(PipelineState.LISTENING)
@@ -440,7 +465,12 @@ class Pipeline:
             logger.error(f"Failed to open microphone: {e}")
             self.set_state(PipelineState.ERROR)
             for cb in self._on_error:
-                await cb(f"Microphone error: {e}")
+                try:
+                    r = cb(f"Microphone error: {e}")
+                    if r is not None and asyncio.iscoroutine(r):
+                        await r
+                except Exception:
+                    pass
         finally:
             logger.info("Microphone loop ended")
             await self.stop()
