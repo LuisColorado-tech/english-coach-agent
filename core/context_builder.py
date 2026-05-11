@@ -147,29 +147,7 @@ class ContextBuilder:
         )
 
     def _get_recent_errors_summary(self) -> str:
-        """
-        Query recent errors from the corrections tracker.
-        Returns a formatted summary string.
-        """
-        # Try to read from the corrections tracker if DB exists
-        try:
-            from memory.corrections_tracker import CorrectionsTracker
-
-            tracker = CorrectionsTracker(self._db_path)
-            frequent = tracker.get_frequent_errors(
-                recent_sessions=RECENT_ERRORS_SESSIONS,
-                limit=MAX_ERRORS_INJECTED,
-            )
-
-            if frequent:
-                lines = ["The user has recently made these types of errors. "
-                          "Watch for these patterns:"]
-                for cat, count in frequent:
-                    lines.append(f"  - {cat}: {count} occurrences in recent sessions")
-                return "\n".join(lines)
-        except Exception:
-            pass
-
+        """Query recent errors. Uses JSON fallback since DB access is async."""
         # Fallback: read from session_last.json if available
         try:
             from config.settings import DATA_DIR

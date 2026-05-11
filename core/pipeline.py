@@ -101,6 +101,7 @@ class Pipeline:
         self._is_collecting = False
         self._conversation_active = False
         self._pause_event = asyncio.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._pause_event.set()  # Not paused initially
 
         # Callbacks
@@ -122,7 +123,12 @@ class Pipeline:
         self._state = new_state
         logger.debug(f"Pipeline state: {old_state.name} → {new_state.name}")
         for cb in self._on_state_change:
-            asyncio.ensure_future(cb(new_state, old_state))
+            try:
+                result = cb(new_state, old_state)
+                if result is not None and asyncio.iscoroutine(result):
+                    asyncio.ensure_future(result)
+            except Exception:
+                pass
 
     # === Event callbacks ===
 
@@ -389,14 +395,20 @@ class Pipeline:
 
         queue: asyncio.Queue = asyncio.Queue()
 
+        # Capture the event loop for use in the CFFI audio callback thread
+        loop = asyncio.get_running_loop()
+        self._loop = loop
+
         def audio_callback(indata, frames, time_info, status):
             if status:
                 logger.warning(f"Audio status: {status}")
-            # Put a copy of the audio data in the queue
-            asyncio.run_coroutine_threadsafe(
-                queue.put(indata.copy().flatten()),
-                asyncio.get_event_loop(),
-            )
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    queue.put(indata.copy().flatten()),
+                    loop,
+                )
+            except Exception:
+                pass  # Queue full or loop closing
 
         try:
             stream = sd.InputStream(
